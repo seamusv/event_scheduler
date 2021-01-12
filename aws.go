@@ -254,7 +254,9 @@ func (t *AutoScaler) ParseICSFile() error {
 	if err := c.Parse(); err != nil {
 		return err
 	}
-	sort.Sort(ByStart{c.Events})
+	sort.Slice(c.Events, func(i, j int) bool {
+		return c.Events[i].Start.Before(*c.Events[j].Start)
+	})
 
 	var dailyEntries = make([]Entry, 0)
 	for _, e := range c.Events {
@@ -319,12 +321,4 @@ func nameSplitter(tokenName string) (name string, state string, tz string, ok bo
 		return "", "", "", false
 	}
 	return x[0], x[1], strings.ReplaceAll(x[2], "/", ":"), true
-}
-
-type ByStart struct{ Events []gocal.Event }
-
-func (a ByStart) Len() int      { return len(a.Events) }
-func (a ByStart) Swap(i, j int) { a.Events[i], a.Events[j] = a.Events[j], a.Events[i] }
-func (s ByStart) Less(i, j int) bool {
-	return s.Events[i].Start.Format(time.RFC3339) < s.Events[j].Start.Format(time.RFC3339)
 }
