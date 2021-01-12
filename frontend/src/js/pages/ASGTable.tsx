@@ -27,6 +27,10 @@ export const ASGTable = () => {
         (window as any).backend.AutoScaler.DeleteSchedule(ids).then(() => setRefresh(!refresh));
     }
 
+    const importICS = () => {
+        (window as any).backend.AutoScaler.ParseICSFile().then(() => setRefresh(!refresh));
+    }
+
     return (
         <>
             {modal}
@@ -34,6 +38,12 @@ export const ASGTable = () => {
                 <div className="px-4 py-5 sm:px-6">
                     <div className="flex justify-end">
                         <Button
+                            onClick={importICS}
+                        >
+                            Import from ICS
+                        </Button>
+                        <Button
+                            className="ml-2"
                             onClick={() => setModal(
                                 <AddEntryModal
                                     onClose={() => setModal(null)}

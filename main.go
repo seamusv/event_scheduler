@@ -13,7 +13,7 @@ var (
 	finishSize = flag.Int64("size", 2, "Server count on finish")
 )
 
-func main() {
+func run() error {
 	flag.Parse()
 
 	_ = os.Setenv("AWS_SDK_LOAD_CONFIG", "1")
@@ -24,7 +24,7 @@ func main() {
 
 	autoscaler, err := NewAutoScaler(*asgName, *finishSize)
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	app := wails.CreateApp(&wails.AppConfig{
@@ -37,5 +37,11 @@ func main() {
 		Resizable: true,
 	})
 	app.Bind(autoscaler)
-	app.Run()
+	return app.Run()
+}
+
+func main() {
+	if err := run(); err != nil {
+		panic(err)
+	}
 }

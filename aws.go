@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/apognu/gocal"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/session"
@@ -9,6 +10,7 @@ import (
 	"github.com/mitchellh/mapstructure"
 	"github.com/wailsapp/wails"
 	"math/rand"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -58,6 +60,10 @@ func (t *AutoScaler) AddSchedule(data map[string]interface{}) error {
 		return err
 	}
 
+	return t.addScheduleEntry(entry)
+}
+
+func (t *AutoScaler) addScheduleEntry(entry Entry) error {
 	start, err := time.Parse(time.RFC3339, entry.Start)
 	if err != nil {
 		return err
@@ -120,7 +126,10 @@ func (t *AutoScaler) DeleteSchedule(data []interface{}) error {
 	if err := mapstructure.Decode(data, &ids); err != nil {
 		return err
 	}
+	return t.deleteSchedules(ids)
+}
 
+func (t *AutoScaler) deleteSchedules(ids []string) error {
 	for _, id := range ids {
 		input := &autoscaling.DeleteScheduledActionInput{
 			AutoScalingGroupName: aws.String(t.asgName),
@@ -219,6 +228,86 @@ func (t *AutoScaler) GetSchedule() ([]Schedule, error) {
 	return schedules, nil
 }
 
+func (t *AutoScaler) ParseICSFile() error {
+	filename := t.runtime.Dialog.SelectFile("Select ICS File", "*.ics")
+	//filename := "/Users/svenasse/Downloads/Sparx Client Events_c_ptf2keaah0dcj7govugrahq17s@group.calendar.google.com.ics"
+	fmt.Printf("filename: %s\n", filename)
+
+	schedules, err := t.GetSchedule()
+	if err != nil {
+		return err
+	}
+	for _, schedule := range schedules {
+		if err := t.deleteSchedules(schedule.Ids); err != nil {
+			return err
+		}
+	}
+
+	f, _ := os.Open(filename)
+	defer f.Close()
+
+	start := time.Now()
+	end := start.UTC().Round(time.Hour*24).AddDate(0, 1, -start.Day()).Add(-1 * time.Nanosecond)
+
+	c := gocal.NewParser(f)
+	c.Start, c.End = &start, &end
+	if err := c.Parse(); err != nil {
+		return err
+	}
+	sort.Sort(ByStart{c.Events})
+
+	var dailyEntries = make([]Entry, 0)
+	for _, e := range c.Events {
+		entry := Entry{
+			Name:    e.Summary,
+			Start:   e.Start.Local().Add(-45 * time.Minute).Format(time.RFC3339),
+			Finish:  e.End.Local().Add(45 * time.Minute).Format(time.RFC3339),
+			Servers: 4,
+		}
+		if len(dailyEntries) > 0 {
+			start, _ := time.Parse(time.RFC3339, dailyEntries[0].Start)
+			if !start.Round(time.Hour * 24).Equal(e.Start.Local().Round(time.Hour * 24)) {
+				if err := t.addScheduleEntry(merge(dailyEntries)); err != nil {
+					return err
+				}
+				dailyEntries = make([]Entry, 0)
+			}
+		}
+		dailyEntries = append(dailyEntries, entry)
+		fmt.Printf("%s on %s - %s\n", e.Summary, e.Start.Local().Add(-45*time.Minute), e.End.Local().Add(45*time.Minute))
+	}
+
+	if len(dailyEntries) > 0 {
+		if err := t.addScheduleEntry(merge(dailyEntries)); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func merge(entries []Entry) Entry {
+	genesis := entries[0]
+	for i, entry := range entries {
+		if i > 0 {
+			gStart, _ := time.Parse(time.RFC3339, genesis.Start)
+			gEnd, _ := time.Parse(time.RFC3339, genesis.Finish)
+			eStart, _ := time.Parse(time.RFC3339, entry.Start)
+			eEnd, _ := time.Parse(time.RFC3339, entry.Finish)
+			if eStart.Before(gStart) {
+				genesis.Start = eStart.Format(time.RFC3339)
+			}
+			if eEnd.After(gEnd) {
+				genesis.Finish = eEnd.Format(time.RFC3339)
+			}
+			genesis.Name = fmt.Sprintf("%s %s", genesis.Name, entry.Name)
+		}
+	}
+	gStart, _ := time.Parse(time.RFC3339, genesis.Start)
+	genesis.Name = fmt.Sprintf("%s %s", genesis.Name, gStart.Local().Format("01-02"))
+	return genesis
+}
+
 func (t *AutoScaler) WailsInit(runtime *wails.Runtime) error {
 	t.runtime = runtime
 	return nil
@@ -230,4 +319,12 @@ func nameSplitter(tokenName string) (name string, state string, tz string, ok bo
 		return "", "", "", false
 	}
 	return x[0], x[1], strings.ReplaceAll(x[2], "/", ":"), true
+}
+
+type ByStart struct{ Events []gocal.Event }
+
+func (a ByStart) Len() int      { return len(a.Events) }
+func (a ByStart) Swap(i, j int) { a.Events[i], a.Events[j] = a.Events[j], a.Events[i] }
+func (s ByStart) Less(i, j int) bool {
+	return s.Events[i].Start.Format(time.RFC3339) < s.Events[j].Start.Format(time.RFC3339)
 }
