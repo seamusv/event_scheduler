@@ -25,10 +25,11 @@ type (
 	}
 
 	Entry struct {
-		Name    string `json:"name"`
-		Start   string `json:"start"`
-		Finish  string `json:"finish"`
-		Servers int64  `json:"servers"`
+		Name    string  `json:"name"`
+		Start   string  `json:"start"`
+		Finish  string  `json:"finish"`
+		Servers int64   `json:"servers"`
+		Hours   float64 `json:"hours"`
 	}
 
 	Schedule struct {
@@ -254,38 +255,50 @@ func (t *AutoScaler) ParseICSFile() error {
 	if err := c.Parse(); err != nil {
 		return err
 	}
-	sort.Slice(c.Events, func(i, j int) bool {
-		return c.Events[i].Start.Before(*c.Events[j].Start)
-	})
 
-	var dailyEntries = make([]Entry, 0)
-	for _, e := range c.Events {
-		entry := Entry{
-			Name:    e.Summary,
-			Start:   e.Start.Local().Add(-45 * time.Minute).Format(time.RFC3339),
-			Finish:  e.End.Local().Add(45 * time.Minute).Format(time.RFC3339),
-			Servers: 4,
-		}
-		if len(dailyEntries) > 0 {
-			start, _ := time.Parse(time.RFC3339, dailyEntries[0].Start)
-			if !start.Round(time.Hour * 24).Equal(e.Start.Local().Round(time.Hour * 24)) {
-				if err := t.addScheduleEntry(merge(dailyEntries)); err != nil {
-					return err
-				}
-				dailyEntries = make([]Entry, 0)
-			}
-		}
-		dailyEntries = append(dailyEntries, entry)
-		fmt.Printf("%s on %s - %s\n", e.Summary, e.Start.Local().Add(-45*time.Minute), e.End.Local().Add(45*time.Minute))
-	}
-
-	if len(dailyEntries) > 0 {
-		if err := t.addScheduleEntry(merge(dailyEntries)); err != nil {
+	entries := BuildDailyEntries(c.Events)
+	for _, entry := range entries {
+		fmt.Printf("%-50s %s - %s  %0.2f\n", entry.Name, entry.Start, entry.Finish, entry.Hours)
+		if err := t.addScheduleEntry(entry); err != nil {
+			fmt.Printf("ERROR: %v\n", err)
 			return err
 		}
 	}
 
 	return nil
+}
+
+func BuildDailyEntries(events []gocal.Event) []Entry {
+	var result = make([]Entry, 0)
+	sort.Slice(events, func(i, j int) bool {
+		return events[i].Start.Before(*events[j].Start)
+	})
+
+	var dailyEntries = make([]Entry, 0)
+	for _, e := range events {
+		if e.End.Sub(*e.Start).Hours() < 23.0 {
+			entry := Entry{
+				Name:    e.Summary,
+				Start:   e.Start.Local().Add(-45 * time.Minute).Format(time.RFC3339),
+				Finish:  e.End.Local().Add(45 * time.Minute).Format(time.RFC3339),
+				Servers: 4,
+			}
+			if len(dailyEntries) > 0 {
+				start, _ := time.Parse(time.RFC3339, dailyEntries[0].Start)
+				if !start.Round(time.Hour * 24).Equal(e.Start.Local().Round(time.Hour * 24)) {
+					result = append(result, merge(dailyEntries))
+					dailyEntries = make([]Entry, 0)
+				}
+			}
+			dailyEntries = append(dailyEntries, entry)
+		}
+	}
+
+	if len(dailyEntries) > 0 {
+		result = append(result, merge(dailyEntries))
+	}
+
+	return result
 }
 
 func merge(entries []Entry) Entry {
@@ -306,7 +319,9 @@ func merge(entries []Entry) Entry {
 		}
 	}
 	gStart, _ := time.Parse(time.RFC3339, genesis.Start)
+	gFinish, _ := time.Parse(time.RFC3339, genesis.Finish)
 	genesis.Name = fmt.Sprintf("%s %s", genesis.Name, gStart.Local().Format("01-02"))
+	genesis.Hours = gFinish.Sub(gStart).Hours()
 	return genesis
 }
 
